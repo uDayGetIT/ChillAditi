@@ -1345,7 +1345,7 @@
                         }
                     }, 300);
                 }
-            }, 2000);
+            }, 3000);
         }
 
         function triggerRain(type) {
@@ -1413,17 +1413,14 @@
         // Voice chat functions
         async function initializeVoiceChat() {
             try {
-                // Request microphone access
+                // Request microphone access with more permissive constraints
                 localStream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
-                    }, 
+                    audio: true,
                     video: false 
                 });
                 
                 console.log('Microphone access granted');
+                document.getElementById('voiceStatus').textContent = 'Hold to talk';
                 
                 // Mute by default
                 localStream.getAudioTracks().forEach(track => {
@@ -1434,7 +1431,14 @@
                 
             } catch (error) {
                 console.error('Error accessing microphone:', error);
-                document.getElementById('voiceStatus').textContent = 'Mic access denied';
+                let errorMsg = 'Mic access denied';
+                if (error.name === 'NotAllowedError') {
+                    errorMsg = 'Please allow mic in browser settings';
+                } else if (error.name === 'NotFoundError') {
+                    errorMsg = 'No microphone found';
+                }
+                document.getElementById('voiceStatus').textContent = errorMsg;
+                document.getElementById('voiceStatus').style.color = '#ff4444';
             }
         }
 
@@ -1448,12 +1452,25 @@
                 });
             }
             
-            // Handle incoming tracks
+            // Handle incoming tracks - FIXED for mobile
             peerConnection.ontrack = (event) => {
                 console.log('Received remote track');
-                const remoteAudio = new Audio();
+                const remoteAudio = document.createElement('audio');
                 remoteAudio.srcObject = event.streams[0];
-                remoteAudio.play();
+                remoteAudio.autoplay = true;
+                remoteAudio.volume = 1.0;
+                
+                // For mobile browsers, we need to play after user interaction
+                remoteAudio.play().catch(e => {
+                    console.log('Autoplay prevented, will play on next interaction');
+                    // Add a one-time click listener to start audio
+                    document.body.addEventListener('click', () => {
+                        remoteAudio.play();
+                    }, { once: true });
+                });
+                
+                // Append to body to ensure it stays alive
+                document.body.appendChild(remoteAudio);
             };
             
             // Handle ICE candidates
@@ -1463,6 +1480,13 @@
                         candidate: event.candidate,
                         target: remotePeerId
                     });
+                }
+            };
+            
+            peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    console.log('Voice chat connected!');
                 }
             };
             
@@ -1531,8 +1555,14 @@
             initializeAwards();
         }
 
+        // Remove the duplicate welcome messages
+        let hasShownWelcome = false;
         socket.on('system-message', (data) => {
-            if (data.message.includes('joined the virtual date')) {
+            addSystemMessage(data.message);
+            
+            // Only show welcome once
+            if (data.message.includes('joined the virtual date') && !hasShownWelcome) {
+                hasShownWelcome = true;
                 setTimeout(() => {
                     addSystemMessage('💕 Welcome to your virtual date!');
                     addSystemMessage('💡 Try typing "bc", "heart", "wtf", or "ex" for special effects!');
