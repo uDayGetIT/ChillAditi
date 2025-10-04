@@ -419,10 +419,10 @@
             transform: scale(1.05);
         }
 
-        .ptt-button:active, .ptt-button.talking {
+        .ptt-button.talking {
             background: #ff4500;
-            transform: scale(0.95);
             box-shadow: 0 0 20px rgba(255, 69, 0, 0.5);
+            animation: pulse 1s infinite;
         }
 
         .voice-status {
@@ -708,10 +708,10 @@
                 
                 <div class="voice-controls">
                     <div style="text-align: center;">
-                        <button class="ptt-button" id="pttButton" onmousedown="startTalking()" onmouseup="stopTalking()" ontouchstart="startTalking()" ontouchend="stopTalking()">
+                        <button class="ptt-button" id="pttButton" onclick="toggleMic()">
                             🎤
                         </button>
-                        <div class="voice-status" id="voiceStatus">Hold to talk</div>
+                        <div class="voice-status" id="voiceStatus">Tap to enable mic</div>
                         <div class="peer-talking" id="peerTalking" style="display: none;">🔊 They're talking...</div>
                     </div>
                 </div>
@@ -975,7 +975,6 @@
                     player.destroy();
                 }
                 
-                // Use video tag for direct links and Google Drive
                 playerDiv.innerHTML = `<video id="customPlayer" controls style="width: 100%; height: 100%; background: #000;">
                     <source src="${data.url}" type="video/mp4">
                     Your browser does not support the video tag.
@@ -984,7 +983,6 @@
                 player = document.getElementById('customPlayer');
                 isPlayerReady = true;
                 
-                // Add event listeners for sync
                 player.addEventListener('play', () => {
                     if (!ignoreNextStateChange) {
                         isVideoPlaying = true;
@@ -1014,8 +1012,6 @@
                     console.error('Video error:', e);
                 });
             }
-            
-            addSystemMessage(`🎬 ${data.user} loaded: "${data.title || 'New video'}"`);
         });
 
         socket.on('video-playpause-sync', (data) => {
@@ -1096,7 +1092,6 @@
             }
             
             setTimeout(() => { ignoreNextStateChange = false; }, 500);
-            addSystemMessage('🔄 Videos synchronized!');
         });
 
         socket.on('trigger-effect', (data) => {
@@ -1113,7 +1108,6 @@
             triggerRain('wholesome');
         });
 
-        // Voice chat events
         socket.on('peer-joined', async (data) => {
             console.log('Peer joined:', data.username);
             remotePeerId = data.peerId;
@@ -1232,7 +1226,6 @@
                     return url.split('v=')[1].split('&')[0];
                 }
             }
-            // For direct links, return the URL as-is
             return url;
         }
 
@@ -1429,12 +1422,39 @@
             }
         }
 
-        // Voice chat functions
+        // Voice chat functions - TOGGLE MODE
+        async function toggleMic() {
+            if (!localStream) {
+                await initializeVoiceChat();
+                return;
+            }
+            
+            isTalking = !isTalking;
+            
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = isTalking;
+            });
+            
+            const pttButton = document.getElementById('pttButton');
+            const voiceStatus = document.getElementById('voiceStatus');
+            
+            if (isTalking) {
+                pttButton.classList.add('talking');
+                voiceStatus.textContent = 'Mic ON - Tap to mute';
+                voiceStatus.classList.add('active');
+            } else {
+                pttButton.classList.remove('talking');
+                voiceStatus.textContent = 'Mic OFF - Tap to talk';
+                voiceStatus.classList.remove('active');
+            }
+            
+            socket.emit('voice-status', { isTalking });
+        }
+
         async function initializeVoiceChat() {
             try {
                 console.log('Requesting microphone access...');
                 
-                // Request microphone access with basic constraints
                 localStream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
                         echoCancellation: true,
@@ -1443,23 +1463,21 @@
                 });
                 
                 console.log('Microphone access granted!');
-                document.getElementById('voiceStatus').textContent = 'Ready - Hold to talk';
+                document.getElementById('voiceStatus').textContent = 'Mic OFF - Tap to talk';
                 document.getElementById('voiceStatus').style.color = '#46d160';
                 
-                // Mute by default
                 localStream.getAudioTracks().forEach(track => {
                     track.enabled = false;
-                    console.log('Audio track:', track.label);
                 });
                 
                 await createPeerConnection();
                 
             } catch (error) {
                 console.error('Microphone error:', error);
-                let errorMsg = 'Click to allow mic';
+                let errorMsg = 'Tap to allow mic';
                 
                 if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-                    errorMsg = 'Mic blocked - Check browser settings';
+                    errorMsg = 'Mic blocked - Check settings';
                 } else if (error.name === 'NotFoundError') {
                     errorMsg = 'No microphone found';
                 } else if (error.name === 'NotReadableError') {
@@ -1468,11 +1486,6 @@
                 
                 document.getElementById('voiceStatus').textContent = errorMsg;
                 document.getElementById('voiceStatus').style.color = '#ff4444';
-                
-                // Add click handler to retry
-                document.getElementById('pttButton').onclick = async () => {
-                    await initializeVoiceChat();
-                };
             }
         }
 
@@ -1481,41 +1494,33 @@
                 peerConnection = new RTCPeerConnection(configuration);
                 console.log('Created peer connection');
                 
-                // Add local stream tracks
                 if (localStream) {
                     localStream.getTracks().forEach(track => {
-                        const sender = peerConnection.addTrack(track, localStream);
-                        console.log('Added local track:', track.kind);
+                        peerConnection.addTrack(track, localStream);
                     });
                 }
                 
-                // Handle incoming tracks
                 peerConnection.ontrack = (event) => {
                     console.log('Received remote track!', event.track.kind);
                     
                     if (event.track.kind === 'audio') {
-                        // Remove any existing audio elements first
                         const existingAudio = document.getElementById('remoteAudio');
                         if (existingAudio) {
                             existingAudio.remove();
                         }
                         
-                        // Create new audio element
                         const remoteAudio = document.createElement('audio');
                         remoteAudio.id = 'remoteAudio';
                         remoteAudio.srcObject = event.streams[0];
                         remoteAudio.autoplay = true;
                         remoteAudio.volume = 1.0;
                         
-                        // Append to body
                         document.body.appendChild(remoteAudio);
                         
-                        // Force play
                         remoteAudio.play()
                             .then(() => console.log('Remote audio playing!'))
                             .catch(e => {
                                 console.error('Audio play error:', e);
-                                // Retry on user interaction
                                 const playAudio = () => {
                                     remoteAudio.play()
                                         .then(() => {
@@ -1528,10 +1533,8 @@
                     }
                 };
                 
-                // Handle ICE candidates
                 peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
-                        console.log('Sending ICE candidate');
                         socket.emit('webrtc-ice-candidate', {
                             candidate: event.candidate,
                             target: remotePeerId
@@ -1539,15 +1542,15 @@
                     }
                 };
                 
-                // Connection state monitoring
                 peerConnection.onconnectionstatechange = () => {
-                    console.log('Connection state:', peerConnection.connectionState);
                     const voiceStatus = document.getElementById('voiceStatus');
                     
                     if (peerConnection.connectionState === 'connected') {
-                        console.log('Voice chat connected successfully!');
-                        voiceStatus.textContent = 'Connected - Hold to talk';
-                        voiceStatus.style.color = '#46d160';
+                        console.log('Voice chat connected!');
+                        if (!isTalking) {
+                            voiceStatus.textContent = 'Mic OFF - Tap to talk';
+                            voiceStatus.style.color = '#46d160';
+                        }
                     } else if (peerConnection.connectionState === 'connecting') {
                         voiceStatus.textContent = 'Connecting voice...';
                         voiceStatus.style.color = '#ff4500';
@@ -1557,13 +1560,7 @@
                     }
                 };
                 
-                peerConnection.oniceconnectionstatechange = () => {
-                    console.log('ICE connection state:', peerConnection.iceConnectionState);
-                };
-                
-                // If we're the initiator, create and send offer
                 if (remotePeerId) {
-                    console.log('Creating offer for peer:', remotePeerId);
                     const offer = await peerConnection.createOffer({
                         offerToReceiveAudio: true
                     });
@@ -1573,64 +1570,12 @@
                         offer: offer,
                         target: remotePeerId
                     });
-                    console.log('Offer sent');
                 }
             } catch (error) {
                 console.error('Peer connection error:', error);
             }
         }
 
-        function startTalking() {
-            if (!localStream) {
-                document.getElementById('voiceStatus').textContent = 'Click mic to enable';
-                document.getElementById('voiceStatus').style.color = '#ff4444';
-                // Try to initialize
-                initializeVoiceChat();
-                return;
-            }
-            
-            isTalking = true;
-            console.log('Started talking');
-            
-            // Unmute microphone
-            localStream.getAudioTracks().forEach(track => {
-                track.enabled = true;
-                console.log('Unmuted track:', track.label);
-            });
-            
-            // Update UI
-            document.getElementById('pttButton').classList.add('talking');
-            document.getElementById('voiceStatus').textContent = 'Talking...';
-            document.getElementById('voiceStatus').classList.add('active');
-            document.getElementById('voiceStatus').style.color = '#ff4500';
-            
-            // Notify peer
-            socket.emit('voice-status', { isTalking: true });
-        }
-
-        function stopTalking() {
-            if (!localStream) return;
-            
-            isTalking = false;
-            console.log('Stopped talking');
-            
-            // Mute microphone
-            localStream.getAudioTracks().forEach(track => {
-                track.enabled = false;
-                console.log('Muted track:', track.label);
-            });
-            
-            // Update UI
-            document.getElementById('pttButton').classList.remove('talking');
-            document.getElementById('voiceStatus').textContent = 'Hold to talk';
-            document.getElementById('voiceStatus').classList.remove('active');
-            document.getElementById('voiceStatus').style.color = '#818384';
-            
-            // Notify peer
-            socket.emit('voice-status', { isTalking: false });
-        }
-
-        // Prevent context menu on long press
         document.addEventListener('DOMContentLoaded', () => {
             const pttButton = document.getElementById('pttButton');
             pttButton.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1642,19 +1587,15 @@
             initializeAwards();
         }
 
-        // Remove the duplicate welcome messages
         let hasShownWelcome = false;
-        socket.on('system-message', (data) => {
-            addSystemMessage(data.message);
-            
-            // Only show welcome once
-            if (data.message.includes('joined the virtual date') && !hasShownWelcome) {
+        socket.on('welcome-message', () => {
+            if (!hasShownWelcome) {
                 hasShownWelcome = true;
                 setTimeout(() => {
                     addSystemMessage('💕 Welcome to your virtual date!');
-                    addSystemMessage('💡 Try typing "bc", "heart", "wtf", or "ex" for special effects!');
-                    addSystemMessage('🎬 Load a video and it will sync for both of you!');
-                }, 3000);
+                    addSystemMessage('💡 Try "bc", "heart", "wtf", or "ex" for effects!');
+                    addSystemMessage('🎬 Videos sync automatically!');
+                }, 1000);
             }
         });
     </script>
