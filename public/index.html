@@ -616,7 +616,6 @@
 
                 <div class="video-type-tabs">
                     <div class="video-tab active" data-type="youtube" onclick="selectVideoType('youtube')">YouTube</div>
-                    <div class="video-tab" data-type="gdrive" onclick="selectVideoType('gdrive')">Google Drive</div>
                     <div class="video-tab" data-type="direct" onclick="selectVideoType('direct')">Direct Link</div>
                 </div>
                 
@@ -711,8 +710,6 @@
             const input = document.getElementById('videoUrl');
             if (type === 'youtube') {
                 input.placeholder = 'Drop that YouTube link here... 🎬';
-            } else if (type === 'gdrive') {
-                input.placeholder = 'Paste Google Drive video link (must be publicly viewable)... 📁';
             } else {
                 input.placeholder = 'Paste direct video URL (mp4, webm)... 🎞️';
             }
@@ -901,17 +898,44 @@
                     player.destroy();
                 }
                 
-                playerDiv.innerHTML = `<iframe id="customPlayer" 
-                    src="${data.url}" 
-                    style="width: 100%; height: 100%; border: none; background: #000;"
-                    allow="autoplay; fullscreen">
-                </iframe>`;
+                // Use video tag for direct links and Google Drive
+                playerDiv.innerHTML = `<video id="customPlayer" controls style="width: 100%; height: 100%; background: #000;">
+                    <source src="${data.url}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>`;
                 
                 player = document.getElementById('customPlayer');
                 isPlayerReady = true;
                 
-                // For Google Drive iframes, we can't control playback directly
-                // User needs to use the built-in controls
+                // Add event listeners for sync
+                player.addEventListener('play', () => {
+                    if (!ignoreNextStateChange) {
+                        isVideoPlaying = true;
+                        updatePlayPauseButton();
+                        socket.emit('video-playpause', {
+                            isPlaying: true,
+                            currentTime: player.currentTime,
+                            timestamp: Date.now()
+                        });
+                    }
+                });
+                
+                player.addEventListener('pause', () => {
+                    if (!ignoreNextStateChange) {
+                        isVideoPlaying = false;
+                        updatePlayPauseButton();
+                        socket.emit('video-playpause', {
+                            isPlaying: false,
+                            currentTime: player.currentTime,
+                            timestamp: Date.now()
+                        });
+                    }
+                });
+                
+                player.addEventListener('error', (e) => {
+                    addSystemMessage('❌ Error loading video. Try a different format or source.');
+                    console.error('Video error:', e);
+                });
             }
             
             addSystemMessage(`🎬 ${data.user} loaded: "${data.title || 'New video'}"`);
@@ -1056,19 +1080,8 @@
                 } else if (url.includes('youtube.com/watch?v=')) {
                     return url.split('v=')[1].split('&')[0];
                 }
-            } else if (type === 'gdrive') {
-                // Extract file ID from various Google Drive URL formats
-                let fileId;
-                if (url.includes('/file/d/')) {
-                    fileId = url.match(/\/file\/d\/([^\/\?]+)/)[1];
-                } else if (url.includes('id=')) {
-                    fileId = url.match(/id=([^&]+)/)[1];
-                }
-                
-                if (fileId) {
-                    return `https://drive.google.com/file/d/${fileId}/preview`;
-                }
             }
+            // For direct links, return the URL as-is
             return url;
         }
 
