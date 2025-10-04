@@ -388,6 +388,61 @@
             background: #1484d6;
         }
 
+        .voice-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: #272729;
+            border-top: 1px solid #343536;
+        }
+
+        .ptt-button {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #0079d3;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+
+        .ptt-button:hover {
+            background: #1484d6;
+            transform: scale(1.05);
+        }
+
+        .ptt-button:active, .ptt-button.talking {
+            background: #ff4500;
+            transform: scale(0.95);
+            box-shadow: 0 0 20px rgba(255, 69, 0, 0.5);
+        }
+
+        .voice-status {
+            color: #818384;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .voice-status.active {
+            color: #ff4500;
+            font-weight: 500;
+        }
+
+        .peer-talking {
+            color: #46d160;
+            font-size: 12px;
+            text-align: center;
+            animation: pulse 1s infinite;
+        }
+
         .award-modal {
             position: fixed;
             top: 0;
@@ -651,6 +706,16 @@
                 <div class="chat-messages" id="chatMessages"></div>
                 <div class="typing-indicator" id="typingIndicator" style="display: none;"></div>
                 
+                <div class="voice-controls">
+                    <div style="text-align: center;">
+                        <button class="ptt-button" id="pttButton" onmousedown="startTalking()" onmouseup="stopTalking()" ontouchstart="startTalking()" ontouchend="stopTalking()">
+                            🎤
+                        </button>
+                        <div class="voice-status" id="voiceStatus">Hold to talk</div>
+                        <div class="peer-talking" id="peerTalking" style="display: none;">🔊 They're talking...</div>
+                    </div>
+                </div>
+                
                 <div class="chat-input-container">
                     <input 
                         type="text" 
@@ -675,6 +740,18 @@
         let currentVideoType = 'youtube';
         let isPlayerReady = false;
         let ignoreNextStateChange = false;
+
+        // Voice chat variables
+        let localStream = null;
+        let peerConnection = null;
+        let remotePeerId = null;
+        let isTalking = false;
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
 
         const awards = [
             { emoji: '❤️', name: 'Heart Eyes', description: 'You make my heart skip!' },
@@ -1036,6 +1113,59 @@
             triggerRain('wholesome');
         });
 
+        // Voice chat events
+        socket.on('peer-joined', async (data) => {
+            console.log('Peer joined:', data.username);
+            remotePeerId = data.peerId;
+            await initializeVoiceChat();
+        });
+
+        socket.on('existing-peers', async (peers) => {
+            if (peers.length > 0) {
+                remotePeerId = peers[0].peerId;
+                await initializeVoiceChat();
+            }
+        });
+
+        socket.on('webrtc-offer', async (data) => {
+            console.log('Received offer from:', data.sender);
+            remotePeerId = data.sender;
+            
+            if (!peerConnection) {
+                await createPeerConnection();
+            }
+            
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            socket.emit('webrtc-answer', {
+                answer: answer,
+                target: data.sender
+            });
+        });
+
+        socket.on('webrtc-answer', async (data) => {
+            console.log('Received answer from:', data.sender);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        });
+
+        socket.on('webrtc-ice-candidate', async (data) => {
+            if (peerConnection && data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        });
+
+        socket.on('peer-voice-status', (data) => {
+            const peerTalking = document.getElementById('peerTalking');
+            if (data.isTalking) {
+                peerTalking.style.display = 'block';
+                peerTalking.textContent = `🔊 ${data.username} is talking...`;
+            } else {
+                peerTalking.style.display = 'none';
+            }
+        });
+
         const rainTriggers = {
             'ex': '😤',
             'bc': '😂',
@@ -1044,7 +1174,9 @@
             'momo': '🥟',
             'aditya': '🌈',
             'xd': '😆',
-            'wholesome': '✨'
+            'wholesome': '✨',
+            'love': '💕',
+            'kiss': '💋'
         };
 
         function sendMessage() {
@@ -1092,11 +1224,10 @@
             let videoId = extractVideoId(url, currentVideoType);
             
             socket.emit('load-video', {
-                url: currentVideoType === 'gdrive' || currentVideoType === 'direct' ? videoId : url,
+                url: currentVideoType === 'direct' ? videoId : url,
                 videoId: videoId,
                 videoType: currentVideoType,
-                title: currentVideoType === 'youtube' ? 'YouTube Video' : 
-                       currentVideoType === 'gdrive' ? 'Google Drive Video' : 'Video'
+                title: currentVideoType === 'youtube' ? 'YouTube Video' : 'Video'
             });
         }
 
@@ -1278,6 +1409,121 @@
                 sendMessage();
             }
         }
+
+        // Voice chat functions
+        async function initializeVoiceChat() {
+            try {
+                // Request microphone access
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }, 
+                    video: false 
+                });
+                
+                console.log('Microphone access granted');
+                
+                // Mute by default
+                localStream.getAudioTracks().forEach(track => {
+                    track.enabled = false;
+                });
+                
+                await createPeerConnection();
+                
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                document.getElementById('voiceStatus').textContent = 'Mic access denied';
+            }
+        }
+
+        async function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(configuration);
+            
+            // Add local stream tracks
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+            }
+            
+            // Handle incoming tracks
+            peerConnection.ontrack = (event) => {
+                console.log('Received remote track');
+                const remoteAudio = new Audio();
+                remoteAudio.srcObject = event.streams[0];
+                remoteAudio.play();
+            };
+            
+            // Handle ICE candidates
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && remotePeerId) {
+                    socket.emit('webrtc-ice-candidate', {
+                        candidate: event.candidate,
+                        target: remotePeerId
+                    });
+                }
+            };
+            
+            // If we're the initiator, create and send offer
+            if (remotePeerId) {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('webrtc-offer', {
+                    offer: offer,
+                    target: remotePeerId
+                });
+            }
+        }
+
+        function startTalking() {
+            if (!localStream) {
+                document.getElementById('voiceStatus').textContent = 'Please allow mic access';
+                return;
+            }
+            
+            isTalking = true;
+            
+            // Unmute microphone
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = true;
+            });
+            
+            // Update UI
+            document.getElementById('pttButton').classList.add('talking');
+            document.getElementById('voiceStatus').textContent = 'Talking...';
+            document.getElementById('voiceStatus').classList.add('active');
+            
+            // Notify peer
+            socket.emit('voice-status', { isTalking: true });
+        }
+
+        function stopTalking() {
+            if (!localStream) return;
+            
+            isTalking = false;
+            
+            // Mute microphone
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = false;
+            });
+            
+            // Update UI
+            document.getElementById('pttButton').classList.remove('talking');
+            document.getElementById('voiceStatus').textContent = 'Hold to talk';
+            document.getElementById('voiceStatus').classList.remove('active');
+            
+            // Notify peer
+            socket.emit('voice-status', { isTalking: false });
+        }
+
+        // Prevent context menu on long press
+        document.addEventListener('DOMContentLoaded', () => {
+            const pttButton = document.getElementById('pttButton');
+            pttButton.addEventListener('contextmenu', (e) => e.preventDefault());
+        });
 
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', initializeAwards);
