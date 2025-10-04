@@ -12,14 +12,12 @@ const io = socketIo(server, {
     }
 });
 
-// Serve static files
 app.use(express.static('public'));
 
-// Store current video state
 let currentVideoState = {
     url: '',
     videoId: '',
-    videoType: 'youtube', // youtube, gdrive, vimeo
+    videoType: 'youtube',
     isPlaying: false,
     currentTime: 0,
     lastUpdate: Date.now()
@@ -27,7 +25,7 @@ let currentVideoState = {
 
 let connectedUsers = new Map();
 let messageHistory = [];
-let peerConnections = new Map(); // Store peer connection info
+let peerConnections = new Map();
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
@@ -35,33 +33,38 @@ io.on('connection', (socket) => {
     socket.on('user-join', (userData) => {
         connectedUsers.set(socket.id, userData);
         
-        io.emit('system-message', {
-            message: `${userData.username} joined the virtual date! 💕`,
+        // Only show join message, no spam
+        socket.broadcast.emit('system-message', {
+            message: `${userData.username} joined 💕`,
             timestamp: Date.now()
         });
 
+        // Send video state only to the new user
         if (currentVideoState.videoId) {
             socket.emit('video-sync', currentVideoState);
         }
 
+        // Send message history
         messageHistory.forEach(msg => {
             socket.emit('new-message', msg);
         });
 
         io.emit('user-count', connectedUsers.size);
         
-        // Notify all users about new peer for voice chat
+        // Voice chat peer notification
         socket.broadcast.emit('peer-joined', { 
             peerId: socket.id,
             username: userData.username 
         });
         
-        // Send list of existing peers to new user
         const existingPeers = Array.from(connectedUsers.entries())
             .filter(([id]) => id !== socket.id)
             .map(([id, user]) => ({ peerId: id, username: user.username }));
         
         socket.emit('existing-peers', existingPeers);
+        
+        // Send welcome only to the joining user
+        socket.emit('welcome-message');
     });
 
     socket.on('send-message', (messageData) => {
@@ -78,6 +81,7 @@ io.on('connection', (socket) => {
 
         io.emit('new-message', message);
 
+        // Trigger effects without spam messages
         const triggerWords = ['ex', 'bc', 'wtf', 'heart', 'momo', 'aditya', 'xd'];
         const lowerMessage = messageData.content.toLowerCase();
         triggerWords.forEach(trigger => {
@@ -102,6 +106,12 @@ io.on('connection', (socket) => {
             ...videoData,
             user: user?.username || 'Someone'
         });
+        
+        // Single system message for video load
+        io.emit('system-message', {
+            message: `🎬 ${user?.username || 'Someone'} loaded a video`,
+            timestamp: Date.now()
+        });
     });
 
     socket.on('video-playpause', (data) => {
@@ -109,17 +119,10 @@ io.on('connection', (socket) => {
         currentVideoState.currentTime = data.currentTime;
         currentVideoState.lastUpdate = Date.now();
 
-        const user = connectedUsers.get(socket.id);
-        
+        // Sync to other users without spam message
         socket.broadcast.emit('video-playpause-sync', {
             isPlaying: data.isPlaying,
-            currentTime: data.currentTime,
-            user: user?.username || 'Someone'
-        });
-        
-        io.emit('system-message', {
-            message: `${user?.username || 'Someone'} ${data.isPlaying ? 'played ▶️' : 'paused ⏸️'} the video`,
-            timestamp: Date.now()
+            currentTime: data.currentTime
         });
     });
 
@@ -133,19 +136,21 @@ io.on('connection', (socket) => {
     });
 
     socket.on('sync-request', (data) => {
-        const user = connectedUsers.get(socket.id);
-        
         if (data) {
             currentVideoState.currentTime = data.currentTime;
             currentVideoState.isPlaying = data.isPlaying;
             currentVideoState.lastUpdate = Date.now();
         }
         
-        io.emit('sync-requested', {
-            user: user?.username || 'Someone'
-        });
-        
+        // Send sync state without message
         io.emit('video-sync', currentVideoState);
+        
+        // Single sync message
+        const user = connectedUsers.get(socket.id);
+        io.emit('system-message', {
+            message: `🔄 ${user?.username || 'Someone'} synced`,
+            timestamp: Date.now()
+        });
     });
 
     socket.on('give-award', (awardData) => {
@@ -187,7 +192,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // WebRTC signaling for voice chat
+    // WebRTC signaling
     socket.on('webrtc-offer', (data) => {
         socket.to(data.target).emit('webrtc-offer', {
             offer: data.offer,
@@ -221,8 +226,9 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         const user = connectedUsers.get(socket.id);
         if (user) {
+            // Simple leave message
             io.emit('system-message', {
-                message: `${user.username} left the date 😢`,
+                message: `${user.username} left 😢`,
                 timestamp: Date.now()
             });
         }
