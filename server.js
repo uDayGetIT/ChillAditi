@@ -27,6 +27,7 @@ let currentVideoState = {
 
 let connectedUsers = new Map();
 let messageHistory = [];
+let peerConnections = new Map(); // Store peer connection info
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
@@ -48,6 +49,19 @@ io.on('connection', (socket) => {
         });
 
         io.emit('user-count', connectedUsers.size);
+        
+        // Notify all users about new peer for voice chat
+        socket.broadcast.emit('peer-joined', { 
+            peerId: socket.id,
+            username: userData.username 
+        });
+        
+        // Send list of existing peers to new user
+        const existingPeers = Array.from(connectedUsers.entries())
+            .filter(([id]) => id !== socket.id)
+            .map(([id, user]) => ({ peerId: id, username: user.username }));
+        
+        socket.emit('existing-peers', existingPeers);
     });
 
     socket.on('send-message', (messageData) => {
@@ -171,6 +185,37 @@ io.on('connection', (socket) => {
                 isTyping: false
             });
         }
+    });
+
+    // WebRTC signaling for voice chat
+    socket.on('webrtc-offer', (data) => {
+        socket.to(data.target).emit('webrtc-offer', {
+            offer: data.offer,
+            sender: socket.id
+        });
+    });
+
+    socket.on('webrtc-answer', (data) => {
+        socket.to(data.target).emit('webrtc-answer', {
+            answer: data.answer,
+            sender: socket.id
+        });
+    });
+
+    socket.on('webrtc-ice-candidate', (data) => {
+        socket.to(data.target).emit('webrtc-ice-candidate', {
+            candidate: data.candidate,
+            sender: socket.id
+        });
+    });
+
+    socket.on('voice-status', (data) => {
+        const user = connectedUsers.get(socket.id);
+        socket.broadcast.emit('peer-voice-status', {
+            peerId: socket.id,
+            isTalking: data.isTalking,
+            username: user?.username
+        });
     });
 
     socket.on('disconnect', () => {
