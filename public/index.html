@@ -1135,24 +1135,43 @@
                 await createPeerConnection();
             }
             
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            
-            socket.emit('webrtc-answer', {
-                answer: answer,
-                target: data.sender
-            });
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                console.log('Set remote description (offer)');
+                
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                console.log('Created and set answer');
+                
+                socket.emit('webrtc-answer', {
+                    answer: answer,
+                    target: data.sender
+                });
+                console.log('Answer sent');
+            } catch (error) {
+                console.error('Error handling offer:', error);
+            }
         });
 
         socket.on('webrtc-answer', async (data) => {
             console.log('Received answer from:', data.sender);
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                console.log('Set remote description (answer)');
+            } catch (error) {
+                console.error('Error handling answer:', error);
+            }
         });
 
         socket.on('webrtc-ice-candidate', async (data) => {
+            console.log('Received ICE candidate');
             if (peerConnection && data.candidate) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    console.log('Added ICE candidate');
+                } catch (error) {
+                    console.error('Error adding ICE candidate:', error);
+                }
             }
         });
 
@@ -1420,8 +1439,7 @@
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true
-                    },
-                    video: false 
+                    }
                 });
                 
                 console.log('Microphone access granted!');
@@ -1564,21 +1582,27 @@
 
         function startTalking() {
             if (!localStream) {
-                document.getElementById('voiceStatus').textContent = 'Please allow mic access';
+                document.getElementById('voiceStatus').textContent = 'Click mic to enable';
+                document.getElementById('voiceStatus').style.color = '#ff4444';
+                // Try to initialize
+                initializeVoiceChat();
                 return;
             }
             
             isTalking = true;
+            console.log('Started talking');
             
             // Unmute microphone
             localStream.getAudioTracks().forEach(track => {
                 track.enabled = true;
+                console.log('Unmuted track:', track.label);
             });
             
             // Update UI
             document.getElementById('pttButton').classList.add('talking');
             document.getElementById('voiceStatus').textContent = 'Talking...';
             document.getElementById('voiceStatus').classList.add('active');
+            document.getElementById('voiceStatus').style.color = '#ff4500';
             
             // Notify peer
             socket.emit('voice-status', { isTalking: true });
@@ -1588,16 +1612,19 @@
             if (!localStream) return;
             
             isTalking = false;
+            console.log('Stopped talking');
             
             // Mute microphone
             localStream.getAudioTracks().forEach(track => {
                 track.enabled = false;
+                console.log('Muted track:', track.label);
             });
             
             // Update UI
             document.getElementById('pttButton').classList.remove('talking');
             document.getElementById('voiceStatus').textContent = 'Hold to talk';
             document.getElementById('voiceStatus').classList.remove('active');
+            document.getElementById('voiceStatus').style.color = '#818384';
             
             // Notify peer
             socket.emit('voice-status', { isTalking: false });
