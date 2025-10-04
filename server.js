@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -11,11 +12,14 @@ const io = socketIo(server, {
     }
 });
 
+// Serve static files
 app.use(express.static('public'));
 
+// Store current video state
 let currentVideoState = {
     url: '',
     videoId: '',
+    videoType: 'youtube', // youtube, gdrive, vimeo
     isPlaying: false,
     currentTime: 0,
     lastUpdate: Date.now()
@@ -31,7 +35,7 @@ io.on('connection', (socket) => {
         connectedUsers.set(socket.id, userData);
         
         io.emit('system-message', {
-            message: `${userData.username} joined! 💕`,
+            message: `${userData.username} joined the virtual date! 💕`,
             timestamp: Date.now()
         });
 
@@ -60,7 +64,7 @@ io.on('connection', (socket) => {
 
         io.emit('new-message', message);
 
-        const triggerWords = ['love', 'heart', 'lol', 'haha', 'cute', 'fire', 'wow'];
+        const triggerWords = ['ex', 'bc', 'wtf', 'heart', 'momo', 'aditya', 'xd'];
         const lowerMessage = messageData.content.toLowerCase();
         triggerWords.forEach(trigger => {
             if (lowerMessage.includes(trigger)) {
@@ -73,14 +77,16 @@ io.on('connection', (socket) => {
         currentVideoState = {
             url: videoData.url,
             videoId: videoData.videoId,
+            videoType: videoData.videoType || 'youtube',
             isPlaying: false,
             currentTime: 0,
             lastUpdate: Date.now()
         };
 
+        const user = connectedUsers.get(socket.id);
         io.emit('video-loaded', {
             ...videoData,
-            user: videoData.user
+            user: user?.username || 'Someone'
         });
     });
 
@@ -89,32 +95,62 @@ io.on('connection', (socket) => {
         currentVideoState.currentTime = data.currentTime;
         currentVideoState.lastUpdate = Date.now();
 
+        const user = connectedUsers.get(socket.id);
+        
         socket.broadcast.emit('video-playpause-sync', {
             isPlaying: data.isPlaying,
+            currentTime: data.currentTime,
+            user: user?.username || 'Someone'
+        });
+        
+        io.emit('system-message', {
+            message: `${user?.username || 'Someone'} ${data.isPlaying ? 'played ▶️' : 'paused ⏸️'} the video`,
+            timestamp: Date.now()
+        });
+    });
+
+    socket.on('video-progress', (data) => {
+        currentVideoState.currentTime = data.currentTime;
+        currentVideoState.lastUpdate = Date.now();
+        
+        socket.broadcast.emit('video-progress-sync', {
             currentTime: data.currentTime
         });
     });
 
     socket.on('sync-request', (data) => {
+        const user = connectedUsers.get(socket.id);
+        
         if (data) {
             currentVideoState.currentTime = data.currentTime;
             currentVideoState.isPlaying = data.isPlaying;
             currentVideoState.lastUpdate = Date.now();
         }
         
+        io.emit('sync-requested', {
+            user: user?.username || 'Someone'
+        });
+        
         io.emit('video-sync', currentVideoState);
     });
 
     socket.on('give-award', (awardData) => {
-        io.emit('award-given', awardData);
+        const user = connectedUsers.get(socket.id);
+        io.emit('award-given', {
+            award: awardData,
+            user: user?.username || 'Someone'
+        });
     });
 
-    socket.on('gdrive-loaded', (data) => {
-        socket.broadcast.emit('gdrive-loaded', data);
-    });
-
-    socket.on('voice-room-share', (data) => {
-        socket.broadcast.emit('voice-room-invite', data);
+    socket.on('surprise-me', (data) => {
+        const user = connectedUsers.get(socket.id);
+        
+        io.emit('surprise-popup', {
+            message: data.message,
+            user: user?.username || 'Someone'
+        });
+        
+        io.emit('trigger-effect', { trigger: 'wholesome', user: user?.username });
     });
 
     socket.on('typing-start', () => {
@@ -141,7 +177,7 @@ io.on('connection', (socket) => {
         const user = connectedUsers.get(socket.id);
         if (user) {
             io.emit('system-message', {
-                message: `${user.username} left 😢`,
+                message: `${user.username} left the date 😢`,
                 timestamp: Date.now()
             });
         }
@@ -154,5 +190,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🚀 Virtual Date Server running on port ${PORT}`);
+    console.log(`💕 Your date platform is ready at http://localhost:${PORT}`);
 });
